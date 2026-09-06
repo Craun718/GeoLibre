@@ -40,6 +40,11 @@ export function PrimaryCesiumCanvas({ engineRef, onEngineReady }: PrimaryCesiumC
   // identity changes.
   const controlLabels = useMemo<CesiumWidgetControlLabels>(
     () => ({
+      basemap: t("renderer.basemap"),
+      imagery: t("renderer.imagery"),
+      other: t("newProject.sectionOther"),
+      terrain: t("toolbar.mapControl.terrain"),
+      projectBasemap: t("renderer.projectBasemap"),
       home: t("renderer.resetView"),
       sceneMode3D: t("renderer.scene3D"),
       sceneMode2D: t("renderer.scene2D"),

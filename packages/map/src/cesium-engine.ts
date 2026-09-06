@@ -111,6 +111,8 @@ const FLY_SECONDS = 0.8;
 const POINT_FIT_ZOOM = 14;
 
 export interface CesiumEngineOptions {
+  /** Whether this canvas has credentials for Cesium World Terrain. */
+  worldTerrainAvailable?: boolean;
   /**
    * Id of the `secondaryMapViews` record this globe draws, or `undefined` when
    * it *is* the primary map area. Decides which camera the engine publishes to
@@ -198,7 +200,9 @@ export class CesiumEngine implements MapEngine {
   private minZoom = 0;
   private maxZoom = 24;
 
+  private readonly worldTerrainAvailable: boolean;
   private terrainEnabled = false;
+  private terrainRequest = 0;
   private terrainExaggeration = 1;
   private disposers: Array<() => void> = [];
   /**
@@ -211,6 +215,7 @@ export class CesiumEngine implements MapEngine {
     this.Cesium = Cesium;
     this.viewer = viewer;
     this.viewId = options.viewId;
+    this.worldTerrainAvailable = options.worldTerrainAvailable ?? true;
     this.capabilities =
       options.viewId === undefined ? CESIUM_CAPABILITIES : CESIUM_PANE_CAPABILITIES;
     this.layerSync = new CesiumLayerSync(Cesium, viewer);
@@ -576,6 +581,9 @@ export class CesiumEngine implements MapEngine {
   }
 
   setBuiltInControlVisible(control: BuiltInMapControl, visible: boolean): boolean {
+    // Terrain is a scene setting; unlike fullscreen it has no separate control
+    // instance. The menu and project restore must still reach the engine.
+    if (control === "terrain" && this.isPrimary) return this.setTerrainEnabled(visible);
     const instance = this.builtInControls.get(control);
     if (!instance || !this.isPrimary) return false;
     const host = getPrimaryCesiumControlHost();
@@ -620,9 +628,11 @@ export class CesiumEngine implements MapEngine {
    */
   setTerrainEnabled(enabled: boolean): boolean {
     const viewer = this.live();
-    if (!viewer) return false;
+    if (!viewer || (enabled && !this.worldTerrainAvailable)) return false;
+    if (this.terrainEnabled === enabled) return true;
     if (!enabled) {
       this.terrainEnabled = false;
+      this.terrainRequest++;
       viewer.terrainProvider = new this.Cesium.EllipsoidTerrainProvider();
       return true;
     }
@@ -641,16 +651,21 @@ export class CesiumEngine implements MapEngine {
    * to it fire-and-forget.
    */
   async enableWorldTerrain(): Promise<void> {
+    if (!this.worldTerrainAvailable) return;
     this.terrainEnabled = true;
+    const request = ++this.terrainRequest;
     try {
       const provider = await this.Cesium.createWorldTerrainAsync();
       const viewer = this.live();
       // The toggle may have been reversed, or the viewer destroyed, while the
       // provider loaded; applying it then would resurrect terrain the user just
       // turned off.
-      if (viewer && this.terrainEnabled) viewer.terrainProvider = provider;
+      if (viewer && this.terrainEnabled && request === this.terrainRequest) {
+        viewer.terrainProvider = provider;
+      }
     } catch {
-      // Terrain is best-effort; the globe still renders without it.
+      // Allow a subsequent enable to retry, without resetting a newer request.
+      if (request === this.terrainRequest) this.terrainEnabled = false;
     }
   }
 
