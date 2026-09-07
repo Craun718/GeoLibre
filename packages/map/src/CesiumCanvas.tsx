@@ -12,6 +12,7 @@ import type { CesiumWidget, ImageryLayer } from "@cesium/engine";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { applyBasemapAppearance, applyBasemapImagery, getStadiaApiKey } from "./cesium-basemap";
 import { isSameView } from "./cesium-camera";
+import { installCesiumInteractions } from "./cesium-interactions";
 import { CesiumEngine } from "./cesium-engine";
 import type { MapEngine } from "./map-engine";
 import { CesiumControlHost, setPrimaryCesiumControlHost } from "./cesium-control-host";
@@ -105,6 +106,8 @@ export interface CesiumCanvasProps {
    * Only the primary globe hosts controls, so this is ignored on a grid pane.
    */
   controlLabels?: CesiumWidgetControlLabels;
+  /** Translated accessible label for the Identify popup close button. */
+  popupCloseLabel?: string;
 }
 
 /**
@@ -150,11 +153,13 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   engineRef,
   onEngineReady,
   controlLabels,
+  popupCloseLabel,
 }: CesiumCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<CesiumWidget | null>(null);
   const cesiumRef = useRef<typeof import("@cesium/engine") | null>(null);
   const engineInstanceRef = useRef<CesiumEngine | null>(null);
+  const interactionCleanup = useRef<(() => void) | null>(null);
   const controlHostRef = useRef<CesiumControlHost | null>(null);
   // The Cesium toolbar widgets mounted on the primary globe, kept so the label
   // effect can retranslate them and the unmount can remove them.
@@ -178,6 +183,8 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   engineRefProp.current = engineRef;
   const onEngineReadyRef = useRef(onEngineReady);
   onEngineReadyRef.current = onEngineReady;
+  const popupCloseLabelRef = useRef(popupCloseLabel);
+  popupCloseLabelRef.current = popupCloseLabel;
   const controlLabelsRef = useRef(controlLabels);
   controlLabelsRef.current = controlLabels;
 
@@ -420,6 +427,9 @@ export const CesiumCanvas = memo(function CesiumCanvas({
           }
         }
 
+        // Widget imports can finish after unmount has already destroyed this viewer.
+        if (cancelled || viewer.isDestroyed()) return;
+
         // Seed the camera from the shared store camera before the first frame.
         // The primary globe always seeds from `mapView`, which is what carries
         // the camera across a renderer switch: MapLibre wrote the view the user
@@ -439,6 +449,13 @@ export const CesiumCanvas = memo(function CesiumCanvas({
         // imagery stack rather than having to be lowered past the data layers.
         applyBasemap();
         engine.syncLayers(paneLayersRef.current);
+        if (isPrimaryRef.current)
+          interactionCleanup.current = installCesiumInteractions(
+            Cesium,
+            viewer,
+            engine,
+            () => popupCloseLabelRef.current ?? "Close",
+          );
 
         // Publish the engine only for the primary globe — see `engineRef`.
         if (isPrimaryRef.current && engineRefProp.current) {
@@ -457,6 +474,8 @@ export const CesiumCanvas = memo(function CesiumCanvas({
       cancelled = true;
       // Drops the engine's listeners and its layer sync; the viewer itself is
       // destroyed below.
+      interactionCleanup.current?.();
+      interactionCleanup.current = null;
       engineInstanceRef.current?.destroy();
       // Clear the published ref before the engine is torn down, so nothing can
       // reach a destroyed engine through it. Only ours is cleared: a pane never
