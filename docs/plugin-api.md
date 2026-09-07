@@ -28,6 +28,14 @@ export interface GeoLibrePlugin {
   name: string;
   version: string;
   activeByDefault?: boolean;
+  /**
+   * Renderers this plugin supports. Defaults to `["maplibre"]`.
+   * Engine-neutral plugins (e.g. catalog/service browsers that only write to
+   * the GeoLibre store) or plugins with multi-engine adapters declare
+   * `["maplibre", "cesium"]`. The Plugins menu gates options against the active
+   * renderer.
+   */
+  engines?: ("maplibre" | "cesium")[];
   /** Plugins in the same group cannot be active at the same time. */
   exclusiveGroup?: string;
   /** At least one name is required for handleUrlParameters to be called. */
@@ -959,11 +967,12 @@ If instead you want a plugin compiled into the main JS bundle (no `plugin.json`,
   "version": "0.1.0",
   "entry": "dist/index.js",
   "description": "Optional short description",
-  "style": "dist/style.css"
+  "style": "dist/style.css",
+  "engines": ["maplibre", "cesium"]
 }
 ```
 
-The `entry` file must export a `GeoLibrePlugin` as either the default export or a named `plugin` export. The exported plugin `id`, `name`, and `version` must match `plugin.json`. The entry must be a self-contained `.js` or `.mjs` bundle because relative module imports inside the zip are not resolved by this first loader.
+The `entry` file must export a `GeoLibrePlugin` as either the default export or a named `plugin` export. The exported plugin `id`, `name`, and `version` must match `plugin.json`. The entry must be a self-contained `.js` or `.mjs` bundle because relative module imports inside the zip are not resolved by this first loader. The optional `engines` array declares which map renderers the plugin supports (`"maplibre" | "cesium"`, defaulting to `["maplibre"]`); plugins supporting the 3D globe declare `["maplibre", "cesium"]` so users can toggle them when Cesium is active.
 
 External plugin entries are executed with `import(URL.createObjectURL(...))`, which is why the desktop CSP in `tauri.conf.json` includes `blob:` in `script-src`. Removing `blob:` from `script-src` breaks external plugin loading. Combined with `'unsafe-eval'`, this means code that can create a blob URL can execute scripts, which is acceptable because external plugins are trusted local files installed by the user.
 
