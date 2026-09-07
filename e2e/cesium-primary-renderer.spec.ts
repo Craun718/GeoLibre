@@ -230,6 +230,7 @@ test.describe("Cesium toolbar controls on the globe", () => {
     // All four controls mount into the globe's control host.
     await expect(page.locator(".cesium-home-button")).toBeVisible({ timeout: 60_000 });
     await expect(page.locator(".cesium-sceneModePicker-wrapper")).toBeVisible();
+    await expect(page.locator(".geolibre-cesium-basemap-picker")).toBeVisible();
     await expect(page.locator(".cesium-fullscreenButton")).toBeVisible();
     await expect(page.locator(".geolibre-cesium-basemap-picker button")).toBeVisible();
     // Tooltips come from the app's catalogs, not the widgets' English defaults.
@@ -245,7 +246,9 @@ test.describe("Cesium toolbar controls on the globe", () => {
     // They line up. Cesium gives the scene-mode picker's wrapper a 3px side
     // margin and leaves the fullscreen button to inherit a size from a `Viewer`
     // layout that does not exist here, so both drifted out of the column before
-    // `index.css` pinned them.
+    // `index.css` pinned them. Every control container carries
+    // `.geolibre-cesium-ctrl`, so this counts one visible button per control:
+    // home, scene mode, the basemap/terrain picker, and fullscreen.
     const edges = await page
       .locator(".geolibre-cesium-ctrl button:visible")
       .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
