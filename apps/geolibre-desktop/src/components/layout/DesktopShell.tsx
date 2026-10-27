@@ -36,6 +36,7 @@ import { useScreenshotReadiness } from "../../hooks/useScreenshotReadiness";
 import i18n from "../../i18n";
 import {
   createAppAPI,
+  getPluginManager,
   useExternalPluginsReady,
   useProjectPluginTrust,
   useSwipeSplitViewExclusivity,
@@ -43,6 +44,7 @@ import {
 } from "../../hooks/usePlugins";
 import type { DataUrlLoadState } from "../../hooks/useDataUrlLoader";
 import { wikipediaLang } from "../../lib/knowledge";
+import { isMapClickModeActive } from "../../lib/map-click-modes";
 import { lidarOutputForMap } from "../../lib/lidar-export";
 import { useLineOfSightTool } from "../../lib/line-of-sight-store";
 import { projectUrlFromLocation } from "../../lib/project-url";
@@ -339,6 +341,9 @@ export function DesktopShell({
     mapControllerRef,
     collaboration,
     mapReadyGeneration,
+    // A Directions or Reverse Geocode click places a waypoint or runs a
+    // lookup; it must not also open the comment dialog (#3256).
+    isMapClickModeActive: () => isMapClickModeActive(getPluginManager()),
   });
   const [showResolvedComments, setShowResolvedComments] = useState(false);
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
