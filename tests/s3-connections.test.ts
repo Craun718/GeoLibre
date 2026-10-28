@@ -126,6 +126,89 @@ describe("S3 signing region", () => {
     assert.ok(signed);
     assert.equal(new URL(signed.href).hostname, "bucket.s3.us-west-2.amazonaws.com");
   });
+
+  it("keeps a cancelled caller from caching a fallback or failing a shared probe", async (t) => {
+    let answerProbe: (response: Response) => void = () => undefined;
+    let fetchStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => (fetchStarted = resolve));
+    t.mock.method(globalThis, "fetch", (_url: string, init?: RequestInit) => {
+      fetchStarted();
+      // Honor the signal, so a caller's abort leaking into the shared probe fails the test.
+      return new Promise<Response>((resolve, reject) => {
+        answerProbe = resolve;
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    const keysConnection = connection("probe", {
+      source: "keys",
+      accessKeyId: "AKIAEXAMPLE",
+      secretAccessKey: "secret",
+    });
+    const signer = createS3Signer(() => [keysConnection]);
+    const controller = new AbortController();
+    const cancelled = signer.presign({ bucket: "probed", key: "a.tif" }, controller.signal);
+    const waiting = signer.presign({ bucket: "probed", key: "b.tif" });
+    await started;
+    controller.abort();
+    await assert.rejects(cancelled, (error: Error) => error.name === "AbortError");
+
+    answerProbe(
+      new Response(
+        "<Error><Code>AuthorizationHeaderMalformed</Code><Region>eu-central-1</Region></Error>",
+        {
+          status: 400,
+        },
+      ),
+    );
+    const other = await waiting;
+    assert.match(other?.href ?? "", /%2Feu-central-1%2Fs3%2Faws4_request/);
+    // The cancelled object was not cached under the default region.
+    const retried = await signer.presign({ bucket: "probed", key: "a.tif" });
+    assert.match(retried?.href ?? "", /%2Feu-central-1%2Fs3%2Faws4_request/);
+  });
+
+  it("refuses to sign a key that climbs out of the covered bucket", async () => {
+    const pathStyle = connection("path", {
+      source: "keys",
+      buckets: ["private"],
+      endpoint: "https://minio.test",
+      pathStyle: true,
+      accessKeyId: "AKIAEXAMPLE",
+      secretAccessKey: "secret",
+    });
+    const signer = createS3Signer(() => [pathStyle]);
+    await assert.rejects(
+      signer.presign({ bucket: "private", key: "../other/secret.bin" }),
+      /"\." or "\.\." segment/,
+    );
+  });
+
+  it("does not cache a URL signed for a guessed region", async (t) => {
+    let probes = 0;
+    // No list permission: S3 refuses without naming the region.
+    t.mock.method(globalThis, "fetch", async () => {
+      probes += 1;
+      return new Response("<Error><Code>AccessDenied</Code></Error>", { status: 403 });
+    });
+    const keysConnection = connection("guess", {
+      source: "keys",
+      accessKeyId: "AKIAEXAMPLE",
+      secretAccessKey: "secret",
+    });
+    const signer = createS3Signer(() => [keysConnection]);
+    const first = await signer.presign({ bucket: "unlisted", key: "a.tif" });
+    assert.match(first?.href ?? "", /%2Fus-east-1%2Fs3%2Faws4_request/);
+    const second = await signer.presign({ bucket: "unlisted", key: "b.tif" });
+    assert.match(second?.href ?? "", /%2Fus-east-1%2Fs3%2Faws4_request/);
+    // The failed probe is remembered for a while, so other reads skip it...
+    assert.equal(probes, 1);
+    // ...and nothing signed for the guess was cached: once that wears off, the
+    // same object probes again rather than reusing its first URL.
+    const now = Date.now();
+    t.mock.method(Date, "now", () => now + 6 * 60 * 1000);
+    await signer.presign({ bucket: "unlisted", key: "a.tif" });
+    assert.equal(probes, 2);
+  });
 });
 
 describe("presign lifetime", () => {
