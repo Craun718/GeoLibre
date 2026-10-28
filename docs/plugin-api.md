@@ -214,6 +214,12 @@ export interface GeoLibreAppAPI {
     url: string,
     options: GeoLibreZarrLayerOptions
   ) => Promise<string>;
+  // LAS/LAZ/COPC/EPT through the host's own LiDAR layer. Resolves with the new
+  // layer's id (see "Point cloud layers" below).
+  addPointCloudLayer?: (
+    source: string | File | ArrayBuffer | Uint8Array,
+    options?: GeoLibrePointCloudLayerOptions
+  ) => Promise<string>;
   setZarrLayerSelector?: (
     layerId: string,
     selector: Record<string, number | string>
@@ -326,6 +332,8 @@ export interface GeoLibreAppAPI {
   ) => boolean;
   getDeckGL?: () => Promise<GeoLibreDeckGL>;
   getProj4?: () => Promise<typeof Proj4>;
+  // The host's own maplibre-gl-lidar module (see "Point cloud layers" below).
+  getMaplibreGlLidar?: () => Promise<typeof import("maplibre-gl-lidar")>;
   // Right-sidebar panels (see "Right sidebar panels" below).
   registerRightPanel?: (panel: GeoLibreRightPanelRegistration) => () => void;
   unregisterRightPanel?: (id: string) => void;
@@ -1210,6 +1218,41 @@ Values come back **empty** rather than as an error for a geometry outside the st
 A `selector` passed here only scopes the read: the layer keeps rendering the slice it was on, so an Identify readout for another time does not disturb the map. Use `setZarrLayerSelector` when you do want the display to move.
 
 The panel can also open a store from a folder on disk, via a **Browse folder** button next to the Zarr URL. It appears in the desktop app and in browsers with the File System Access API (Chromium), since reading a folder needs a filesystem API the plugin cannot supply; elsewhere the panel is unchanged. A local cube binds to the Time Slider like a remote one — its CF `units` are read out of the folder, because its recorded URL is an identifier rather than an address.
+
+## Point cloud layers
+
+`addPointCloudLayer` adds a point cloud as a GeoLibre LiDAR layer, the same way **Add Data → LiDAR**, the `?data=` deep link and dropping a file on the map do. The host's LiDAR control renders it, it is listed in the Layers panel, and the user styles it in the LiDAR panel. The source is one of:
+
+- An HTTP(S) or `s3://` URL of a LAS/LAZ file, a **COPC** file (streamed by octree node for the current view), or an EPT `ept.json`. A URL layer is saved with the project and re-streamed when the project is reopened.
+- A `File`, `ArrayBuffer` or `Uint8Array`, loaded in memory. Pass `fileName` (a `File` uses its own name); its extension picks the loader, so a `.copc.laz` name streams the cloud by octree node.
+
+```typescript
+export interface GeoLibrePointCloudLayerOptions {
+  name?: string; // Layers panel name (default: the URL's file name, or fileName)
+  fileName?: string; // loader file name for a File or bytes (.las, .laz, .copc.laz)
+  zoomTo?: boolean; // fly to the point cloud once it loads (default true)
+}
+
+const id = await app.addPointCloudLayer?.("https://example.com/survey.copc.laz", {
+  name: "Survey",
+  zoomTo: false,
+});
+// The id works with the other layer methods: setLayerVisibility, removeLayer, ...
+```
+
+It resolves with the new layer's id once the point cloud has loaded, and rejects when the source is invalid or cannot be read (for example, a server that does not allow this origin through CORS). The URL must serve byte ranges for COPC streaming.
+
+### Drawing point clouds yourself
+
+For points the LiDAR layer does not model, or a custom point renderer, call `app.getMaplibreGlLidar()` to get **GeoLibre's own** `maplibre-gl-lidar` module instead of bundling it. Its `PointCloudLoader` and `CopcStreamingLoader` decode LAS/LAZ/COPC with the LAZ WebAssembly the host already serves, and its `LidarControl`, `LidarLayerAdapter` and `DeckOverlay` render on the host's single deck.gl instance. A bundled copy fails twice over: it carries a second deck.gl/luma.gl, which throws (luma.gl: "already initialized"), and it has to serve its own WebAssembly, which a plugin installed from a desktop folder cannot do (`resolvePluginAssetUrl` returns `null` there). For plain deck.gl layers, `app.getDeckGL()` is enough.
+
+```typescript
+const lidar = await app.getMaplibreGlLidar?.();
+if (!lidar) throw new Error("This plugin requires a host with getMaplibreGlLidar support.");
+const loader = new lidar.PointCloudLoader();
+```
+
+Both members are typed optional for forward-compatibility; call them with optional chaining.
 
 ## Driving a layer's own time dimension from the Time Slider
 

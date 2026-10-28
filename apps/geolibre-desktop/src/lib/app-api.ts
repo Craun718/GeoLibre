@@ -35,6 +35,7 @@ import type {
   GeoLibreEditSessionChange,
   GeoLibreExternalNativeLayerRegistration,
   GeoLibreFileDialogOptions,
+  GeoLibrePointCloudLayerOptions,
   GeoLibreRasterWindowOptions,
   GeoLibreTileLayerOptions,
   GeoLibreVectorTileLayerOptions,
@@ -80,6 +81,7 @@ import { createPluginMapCrsApi } from "./plugin-map-crs";
 import { createPluginHttpSend, createPluginNativeFetch } from "./plugin-native-fetch";
 import { authorizeInPopup, getPluginOAuthRedirectUri } from "./plugin-oauth";
 import { openProjectFromUrlForPlugin } from "./plugin-open-project";
+import { addPluginPointCloudLayer } from "./plugin-point-cloud-layer";
 import {
   clearLayerRequestHeaders,
   setPluginLayerRequestHeaders,
@@ -151,6 +153,8 @@ export interface AppApiHost extends Pick<
   | "isPluginEngineSupported"
   | "maplibreGeoEditorPlugin"
   | "startLayerGeometryEdit"
+  | "addLidarLayerFromUrl"
+  | "addLidarLayerFromBytes"
 > {
   /** The shared plugin manager, for `activatePlugin`/`deactivatePlugin`. */
   plugins: Pick<
@@ -576,6 +580,12 @@ export function createAppAPI(
       requestSpaceborneLidarGranule({ url, fileName, ...(headers ? { headers } : {}) }),
     openSpaceborneLidarGranule: (data: ArrayBuffer, fileName: string) =>
       requestSpaceborneLidarGranule({ data, fileName }),
+    // Point clouds go through the components plugin's shared LiDAR control,
+    // like Add Data → LiDAR, so the layer is listed, styled and saved as usual.
+    addPointCloudLayer: (
+      source: string | File | ArrayBuffer | Uint8Array,
+      options?: GeoLibrePointCloudLayerOptions,
+    ) => addPluginPointCloudLayer(api, host, source, options),
     resolvePluginAssetUrl: resolvePluginAssetUrlForLoadedPlugin,
     activatePlugin: async (pluginId: string, state?: unknown) => {
       const activated = await manager.activate(pluginId, api);
@@ -898,6 +908,16 @@ export function createAppAPI(
         (cached ??= import("maplibre-gl-raster").catch((error) => {
           // Don't memoize a rejection: a transient chunk-load failure would
           // otherwise poison getMaplibreGlRaster() for the whole session.
+          cached = undefined;
+          throw error;
+        }));
+    })(),
+    // Same for maplibre-gl-lidar: its loaders decode LAZ with the WebAssembly
+    // the host serves, and its layers render on the host's deck.gl instance.
+    getMaplibreGlLidar: (() => {
+      let cached: Promise<typeof import("maplibre-gl-lidar")> | undefined;
+      return () =>
+        (cached ??= import("maplibre-gl-lidar").catch((error) => {
           cached = undefined;
           throw error;
         }));

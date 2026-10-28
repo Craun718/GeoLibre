@@ -202,6 +202,8 @@ function fakeHost(overrides: Partial<AppApiHost> = {}): { host: AppApiHost; call
     isPluginEngineSupported: () => true,
     maplibreGeoEditorPlugin: {},
     startLayerGeometryEdit: unused("startLayerGeometryEdit"),
+    addLidarLayerFromUrl: unused("addLidarLayerFromUrl"),
+    addLidarLayerFromBytes: unused("addLidarLayerFromBytes"),
     ...overrides,
   } as unknown as AppApiHost;
   return { host, calls };
@@ -718,6 +720,119 @@ describe("plugin app API edit sessions", () => {
     );
     const tiles = notEditable.addTileLayer("Tiles", "https://tiles.example.com/{z}/{x}/{y}.png");
     assert.equal(await notEditable.startEditSession(tiles), false);
+  });
+});
+
+describe("plugin app API point clouds", () => {
+  beforeEach(() => {
+    useAppStore.getState().newProject({ name: "App API point clouds" });
+  });
+
+  /** A layer like the one the LiDAR control's load handler adds. */
+  const addStoreLayer = (name: string) =>
+    useAppStore.getState().addGeoJsonLayer(name, { type: "FeatureCollection", features: [] });
+  const layerName = (id: string) =>
+    useAppStore.getState().layers.find((layer) => layer.id === id)?.name;
+
+  it("streams a URL through the shared LiDAR control and names the layer", async () => {
+    const calls: unknown[][] = [];
+    const { host } = fakeHost({
+      addLidarLayerFromUrl: async (app, url, options) => {
+        calls.push([app, url, options]);
+        return addStoreLayer("survey.copc.laz");
+      },
+    });
+    const api = createAppAPI(undefined, host);
+
+    const id = await api.addPointCloudLayer("  https://example.com/survey.copc.laz ", {
+      name: "Survey",
+    });
+    assert.deepEqual(calls, [[api, "https://example.com/survey.copc.laz", { fit: true }]]);
+    assert.equal(layerName(id), "Survey");
+
+    const kept = await api.addPointCloudLayer("https://example.com/survey.copc.laz", {
+      zoomTo: false,
+    });
+    assert.deepEqual(calls[1]?.[2], { fit: false });
+    // Without a name the layer keeps the one the LiDAR control gave it.
+    assert.equal(layerName(kept), "survey.copc.laz");
+  });
+
+  it("loads bytes and files under their file name", async () => {
+    const calls: { bytes: unknown; options: unknown }[] = [];
+    const { host } = fakeHost({
+      addLidarLayerFromBytes: async (_app, bytes, options) => {
+        calls.push({ bytes, options });
+        return addStoreLayer(options.name);
+      },
+    });
+    const api = createAppAPI(undefined, host);
+
+    const buffer = new ArrayBuffer(8);
+    await api.addPointCloudLayer(buffer, { fileName: "tile.laz" });
+    const view = calls[0]?.bytes;
+    assert.ok(view instanceof Uint8Array && view.buffer === buffer, "bytes are viewed, not copied");
+    assert.deepEqual(calls[0]?.options, { name: "tile.laz", fileName: "tile.laz", fit: true });
+
+    const file = new File([new Uint8Array(4)], "tile.copc.laz");
+    await api.addPointCloudLayer(file, { name: "Tile", zoomTo: false });
+    assert.equal(calls[1]?.bytes, file, "a File is passed through so a COPC streams");
+    assert.deepEqual(calls[1]?.options, { name: "Tile", fileName: "tile.copc.laz", fit: false });
+  });
+
+  it("rejects sources and options it cannot load, before touching the LiDAR control", async () => {
+    const api = createAppAPI(undefined, fakeHost().host);
+    const bytes = new Uint8Array(4);
+    const cases: [string, () => Promise<string>, RegExp][] = [
+      ["an empty URL", () => api.addPointCloudLayer("  "), /URL is empty/],
+      ["bytes without a file name", () => api.addPointCloudLayer(bytes), /options\.fileName/],
+      [
+        "a file name that is not a point cloud",
+        () => api.addPointCloudLayer(bytes, { fileName: "tile.tif" }),
+        /not a point cloud file name/,
+      ],
+      [
+        "a name that is not a string",
+        () => api.addPointCloudLayer(bytes, { fileName: "a.las", name: 7 as unknown as string }),
+        /options\.name must be a string/,
+      ],
+      [
+        "a source of another type",
+        () => api.addPointCloudLayer({} as unknown as string),
+        /must be a URL, a File/,
+      ],
+    ];
+    for (const [label, call, message] of cases) {
+      await assert.rejects(call, message, label);
+    }
+  });
+
+  it("rejects when the LiDAR control could not be opened", async () => {
+    const { host } = fakeHost({ addLidarLayerFromUrl: async () => null });
+    const api = createAppAPI(undefined, host);
+    await assert.rejects(
+      api.addPointCloudLayer("https://example.com/a.laz"),
+      /could not be opened/,
+    );
+  });
+
+  it("passes the LiDAR control's load errors through", async () => {
+    const { host } = fakeHost({
+      addLidarLayerFromUrl: async () => {
+        throw new Error("Enter a valid HTTP or HTTPS LiDAR URL.");
+      },
+    });
+    const api = createAppAPI(undefined, host);
+    await assert.rejects(api.addPointCloudLayer("ftp://example.com/a.laz"), /valid HTTP/);
+  });
+
+  it("memoizes the shared maplibre-gl-lidar module", async () => {
+    const api = createAppAPI(undefined, fakeHost().host);
+    const first = api.getMaplibreGlLidar();
+    assert.equal(api.getMaplibreGlLidar(), first);
+    // The module may not load under node (it expects a browser); only the
+    // memoization is under test here.
+    await first.catch(() => undefined);
   });
 });
 
