@@ -10,9 +10,11 @@ import {
   installCogTilerDatumShift,
   withDatumShift,
   withGeoKeysDatumShift,
+  withWktDatumShift,
 } from "@geolibre/core";
 import { polygonizeLabels } from "@geolibre/processing";
 import { datumShiftEpsgResolver } from "../packages/plugins/src/plugins/epsg-datum-resolver";
+import { MONTE_MARIO_ITALY_1 } from "./helpers/monte-mario-prj";
 
 /** The British National Grid as the EPSG tables give it (no datum shift). */
 const bng = () =>
@@ -65,6 +67,62 @@ describe("datum shifts", () => {
         metres(proj4(withDatumShift(raw, code), "EPSG:4326", xy), lonLat) < 2,
         `EPSG:${code}`,
       );
+    }
+  });
+
+  it("adds the shift to a .prj's WKT by datum name, ESRI or OGC", () => {
+    assert.ok(
+      withWktDatumShift(MONTE_MARIO_ITALY_1).includes(
+        'SPHEROID["International_1924",6378388.0,297.0],TOWGS84[-104.1,-49.1,-9.9,',
+      ),
+    );
+    // OGC names, and a spheroid with its own AUTHORITY node.
+    const ogc =
+      'GEOGCS["Amersfoort",DATUM["Amersfoort",SPHEROID["Bessel 1841",6377397.155,' +
+      '299.1528128,AUTHORITY["EPSG","7004"]],AUTHORITY["EPSG","6289"]],PRIMEM["Greenwich",0]]';
+    assert.ok(withWktDatumShift(ogc).includes('AUTHORITY["EPSG","7004"]],TOWGS84[565.417,'));
+    assert.ok(
+      withWktDatumShift(
+        'GEOGCS["x",DATUM["Reseau_National_Belge_1972",SPHEROID["a",1,2]]]',
+      ).includes("TOWGS84[-106.8686,"),
+    );
+    // Left alone: a TOWGS84 already there, an unknown datum, WGS84, no WKT at all.
+    const shifted = 'GEOGCS["x",DATUM["D_Monte_Mario",SPHEROID["a",1,2],TOWGS84[1,2,3]]]';
+    assert.equal(withWktDatumShift(shifted), shifted);
+    const unknown = 'GEOGCS["x",DATUM["D_Unknown",SPHEROID["a",1,2]]]';
+    assert.equal(withWktDatumShift(unknown), unknown);
+    const wgs84 =
+      'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]]]';
+    assert.equal(withWktDatumShift(wgs84), wgs84);
+    assert.equal(withWktDatumShift("not wkt"), "not wkt");
+  });
+
+  it("matches every listed datum name, with or without ESRI's D_ prefix, in any case", () => {
+    // Each name's first Helmert parameter, to tell its shift from the others'.
+    const names: [string, string][] = [
+      ["OSGB_1936", "446.448"],
+      ["Ordnance_Survey_of_Great_Britain_1936", "446.448"],
+      ["TM65", "482.5"],
+      ["Deutsches_Hauptdreiecksnetz", "598.1"],
+      ["Amersfoort", "565.417"],
+      ["CH1903", "674.4"],
+      ["CH1903+", "674.374"],
+      ["Belge_1972", "-106.8686"],
+      ["Reseau_National_Belge_1972", "-106.8686"],
+      ["S_JTSK", "589"],
+      ["System_of_the_Unified_Trigonometrical_Cadastral_Network", "589"],
+      ["Monte_Mario", "-104.1"],
+      ["Hungarian_1972", "52.17"],
+      ["Hungarian_Datum_1972", "52.17"],
+      ["GGRS_1987", "-199.87"],
+      ["Greek_Geodetic_Reference_System_1987", "-199.87"],
+      ["Hong_Kong_1980", "-162.619"],
+    ];
+    for (const [name, dx] of names) {
+      for (const datum of [`D_${name}`, name.toLowerCase()]) {
+        const wkt = `GEOGCS["x",DATUM["${datum}",SPHEROID["a",1,2]]]`;
+        assert.ok(withWktDatumShift(wkt).includes(`TOWGS84[${dx},`), datum);
+      }
     }
   });
 
