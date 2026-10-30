@@ -16,7 +16,7 @@ import {
 } from "@geolibre/processing";
 import type { TFunction } from "i18next";
 import { useEffect, type RefObject } from "react";
-import { notify } from "../../lib/notify";
+import { dismissNotification, notify } from "../../lib/notify";
 import { notifyUnrestorableRasters } from "../../lib/local-raster-notices";
 import { isTauri, pickLocalRasterFiles, readRasterFileAtPath } from "../../lib/tauri-io";
 import { createAppAPI } from "../usePlugins";
@@ -60,7 +60,11 @@ export function useRasterFileHandlers(
   // and hands us the bytes; the conversion and the prompt live here because this
   // layer has i18n and the client-side converter. See opengeos/GeoLibre#789.
   useEffect(() => {
+    const conversions = new Set<AbortController>();
     setNonTiledRasterHandler(async ({ name, bytesAreRemote, readBytes, dismiss }) => {
+      const controller = new AbortController();
+      conversions.add(controller);
+      let notice: string | undefined;
       try {
         // A remote source gets a single up-front prompt that names the download:
         // its size is unknown until it has been fetched, so prompting again after
@@ -83,6 +87,7 @@ export function useRasterFileHandlers(
         try {
           bytes = await readBytes();
         } catch (error) {
+          if (controller.signal.aborted) return;
           console.error("[GeoLibre] Failed to read raster for conversion", error);
           notify.error(
             bytesAreRemote
@@ -92,6 +97,7 @@ export function useRasterFileHandlers(
           );
           return;
         }
+        controller.signal.throwIfAborted();
         // A URL can answer 200 with non-GeoTIFF content (an auth/login or error
         // page), which downloads fine but is not convertible. Sniff the TIFF
         // signature up front so that surfaces as a clear "not a GeoTIFF" message
@@ -126,7 +132,19 @@ export function useRasterFileHandlers(
               : t("raster.cogConvertConfirm", { name });
           if (!window.confirm(message)) return;
         }
-        const cog = await convertGeoTiffToCog(bytes);
+        controller.signal.throwIfAborted();
+        notice = notify.info(t("raster.cogConverting", { name }), {
+          durationMs: null,
+          pinned: true,
+          dedupeKey: `cog-conversion-${crypto.randomUUID()}`,
+          action: { label: t("common.cancel"), onClick: () => controller.abort() },
+        });
+        // readBytes may return bytes retained by the original layer. Preserve
+        // that input so cancellation/failure leaves the source usable.
+        const cog = await convertGeoTiffToCog(bytes, { signal: controller.signal });
+        controller.signal.throwIfAborted();
+        if (notice) dismissNotification(notice);
+        notice = undefined;
         // The cast is required: TS types Uint8Array as Uint8Array<ArrayBufferLike>,
         // which is not directly assignable to BlobPart's ArrayBufferView.
         const file = new File([cog as BlobPart], name, {
@@ -138,10 +156,17 @@ export function useRasterFileHandlers(
         // layer (and its message) in place.
         dismiss();
       } catch (error) {
+        if (controller.signal.aborted) return;
         console.error("[GeoLibre] Failed to convert GeoTIFF to COG", error);
         notify.error(t("raster.cogConvertFailed", { name }), { error });
+      } finally {
+        if (notice) dismissNotification(notice);
+        conversions.delete(controller);
       }
     });
-    return () => setNonTiledRasterHandler(null);
+    return () => {
+      setNonTiledRasterHandler(null);
+      for (const controller of conversions) controller.abort();
+    };
   }, [mapControllerRef, t]);
 }
