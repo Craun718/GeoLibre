@@ -150,9 +150,12 @@ export function useRasterFileHandlers(
             onClick: () => controller.abort(),
           },
         });
-        // readBytes may return bytes retained by the original layer. Preserve
-        // that input so cancellation/failure leaves the source usable.
-        const cog = await convertGeoTiffToCog(bytes, { signal: controller.signal });
+        // readBytes returns a fresh buffer; transferring it avoids another
+        // full-size allocation without detaching the original raster's data.
+        const cog = await convertGeoTiffToCog(bytes, {
+          signal: controller.signal,
+          transferInput: true,
+        });
         controller.signal.throwIfAborted();
         if (notice) dismissNotification(notice);
         notice = undefined;

@@ -53,6 +53,7 @@ describe("COG convert-and-load lifecycle", () => {
   it("keeps converting when the UI language changes", async () => {
     render(createElement(RasterHost));
     const { run, dismiss } = await startConversion();
+    assert.equal(conversions[0].options.transferInput, true);
 
     await act(() => i18n.changeLanguage("zh"));
     assert.equal(conversions[0].options.signal?.aborted, false);
