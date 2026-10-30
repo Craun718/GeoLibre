@@ -590,6 +590,7 @@ export function ConversionDialog() {
   const pendingTrackerRef = useRef<ProcessingRunTracker | null>(null);
   const dispatchGuardRef = useRef(false);
   const cogAbortRef = useRef<AbortController | null>(null);
+  const cogSavingRef = useRef<AbortController | null>(null);
   const [cogConverting, setCogConverting] = useState(false);
 
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -598,9 +599,11 @@ export function ConversionDialog() {
   useEffect(() => {
     return () => {
       if (cogAbortRef.current) {
-        cogAbortRef.current.abort();
+        if (cogSavingRef.current !== cogAbortRef.current) {
+          cogAbortRef.current.abort();
+          pendingTrackerRef.current?.finish("error", i18n.t("toolbar.conversion.cancelled"));
+        }
         cogAbortRef.current = null;
-        pendingTrackerRef.current?.finish("error", i18n.t("toolbar.conversion.cancelled"));
       }
     };
   }, [kind]);
@@ -975,6 +978,7 @@ export function ConversionDialog() {
   const runBrowserRasterToCog = async (mainFile: File) => {
     if (!kind) return;
     const controller = new AbortController();
+    const tracker = pendingTrackerRef.current;
     cogAbortRef.current = controller;
     setCogConverting(true);
     const toolId = kind;
@@ -1012,6 +1016,9 @@ export function ConversionDialog() {
       });
       controller.signal.throwIfAborted();
       setCogConverting(false);
+      // Saving has its own irreversible outcome and cannot be aborted by
+      // terminating the conversion worker. Keep its history independent.
+      cogSavingRef.current = controller;
       const savedName = await saveBinaryFileWithFallback(data, {
         defaultName: outputName,
         filters: config?.outputFilters ?? [],
@@ -1023,7 +1030,10 @@ export function ConversionDialog() {
           },
         ],
       });
-      controller.signal.throwIfAborted();
+      if (cogAbortRef.current !== controller) {
+        tracker?.finish("success");
+        return;
+      }
       setJob(
         browserConversionJob(toolId, "succeeded", [
           shape,
@@ -1035,7 +1045,12 @@ export function ConversionDialog() {
       );
     } catch (err) {
       // A closed/switched dialog must not publish an old run into the new tool.
-      if (cogAbortRef.current !== controller) return;
+      if (cogAbortRef.current !== controller) {
+        if (cogSavingRef.current === controller) {
+          tracker?.finish("error", messageFromThrown(err, i18n.t("toolbar.conversion.convertFailed")));
+        }
+        return;
+      }
       if (controller.signal.aborted) {
         const message = i18n.t("toolbar.conversion.cancelled");
         setJob(browserConversionJob(toolId, "cancelled", [message], message));
@@ -1052,6 +1067,7 @@ export function ConversionDialog() {
       }
       setJob(browserConversionJob(toolId, "failed", lines, detail));
     } finally {
+      if (cogSavingRef.current === controller) cogSavingRef.current = null;
       if (cogAbortRef.current === controller) {
         cogAbortRef.current = null;
         setCogConverting(false);
