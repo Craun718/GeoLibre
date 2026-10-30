@@ -1047,7 +1047,10 @@ export function ConversionDialog() {
       // A closed/switched dialog must not publish an old run into the new tool.
       if (cogAbortRef.current !== controller) {
         if (cogSavingRef.current === controller) {
-          tracker?.finish("error", messageFromThrown(err, i18n.t("toolbar.conversion.convertFailed")));
+          tracker?.finish(
+            "error",
+            messageFromThrown(err, i18n.t("toolbar.conversion.convertFailed")),
+          );
         }
         return;
       }

@@ -66,7 +66,8 @@ export async function convertGeoTiffToCog(
       cleanup();
       reject(error);
     };
-    const abort = () => fail(signal?.reason ?? new DOMException("Conversion cancelled.", "AbortError"));
+    const abort = () =>
+      fail(signal?.reason ?? new DOMException("Conversion cancelled.", "AbortError"));
     worker.onmessage = (event: MessageEvent<CogConvertResponse>) => {
       cleanup();
       if (event.data.ok) resolve(event.data.bytes);

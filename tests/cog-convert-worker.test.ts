@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { convertGeoTiffToCog } from "../packages/processing/src/cog-convert";
-import type { CogConvertRequest, CogConvertResponse } from "../packages/processing/src/cog-convert.worker";
+import type {
+  CogConvertRequest,
+  CogConvertResponse,
+} from "../packages/processing/src/cog-convert.worker";
 
 const originalWorker = globalThis.Worker;
 class FakeWorker {
@@ -12,7 +15,10 @@ class FakeWorker {
   request?: CogConvertRequest;
   terminated = false;
   terminateCalls = 0;
-  constructor(readonly url: URL, readonly options: WorkerOptions) {
+  constructor(
+    readonly url: URL,
+    readonly options: WorkerOptions,
+  ) {
     FakeWorker.instances.push(this);
   }
   postMessage(request: CogConvertRequest, transfer: Transferable[]) {
@@ -37,7 +43,9 @@ afterEach(() => {
 function installWorker() {
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
 }
-function lastWorker() { return FakeWorker.instances.at(-1)!; }
+function lastWorker() {
+  return FakeWorker.instances.at(-1)!;
+}
 
 describe("COG conversion worker lifecycle", () => {
   it("keeps reusable source bytes intact, passes codecs/overviews, and releases the worker", async () => {
@@ -45,7 +53,9 @@ describe("COG conversion worker lifecycle", () => {
     const source = Uint8Array.of(1, 2, 3);
     const controller = new AbortController();
     const run = convertGeoTiffToCog(source, {
-      compression: "lzw", overviews: false, signal: controller.signal,
+      compression: "lzw",
+      overviews: false,
+      signal: controller.signal,
     });
     const worker = lastWorker();
     assert.match(worker.url.pathname, /cog-convert\.worker\.ts$/);
@@ -114,7 +124,9 @@ describe("COG conversion worker lifecycle", () => {
 
   it("does not detach input or retry inline when worker creation fails", async () => {
     globalThis.Worker = class {
-      constructor() { throw new Error("Worker blocked"); }
+      constructor() {
+        throw new Error("Worker blocked");
+      }
     } as unknown as typeof Worker;
     const source = Uint8Array.of(1, 2);
     await assert.rejects(convertGeoTiffToCog(source, { transferInput: true }), /Worker blocked/);
@@ -126,9 +138,12 @@ describe("COG conversion worker lifecycle", () => {
     const controller = new AbortController();
     controller.abort();
     const bytes = Uint8Array.of(1);
-    await assert.rejects(convertGeoTiffToCog(bytes, { signal: controller.signal, transferInput: true }), {
-      name: "AbortError",
-    });
+    await assert.rejects(
+      convertGeoTiffToCog(bytes, { signal: controller.signal, transferInput: true }),
+      {
+        name: "AbortError",
+      },
+    );
     assert.equal(FakeWorker.instances.length, 0);
     assert.equal(bytes.byteLength, 1);
   });
@@ -138,13 +153,16 @@ describe("COG conversion worker lifecycle", () => {
       installWorker();
       if (mode === "send") {
         globalThis.Worker = class extends FakeWorker {
-          postMessage() { throw new Error("send failed"); }
+          postMessage() {
+            throw new Error("send failed");
+          }
         } as unknown as typeof Worker;
       }
       const run = convertGeoTiffToCog(Uint8Array.of(1));
       const worker = lastWorker();
       if (mode === "engine") worker.answer({ ok: false, error: "Unsupported sample format" });
-      if (mode === "load") worker.onerror?.({ message: "load failed", preventDefault() {} } as ErrorEvent);
+      if (mode === "load")
+        worker.onerror?.({ message: "load failed", preventDefault() {} } as ErrorEvent);
       if (mode === "message") worker.onmessageerror?.();
       await assert.rejects(run, /Unsupported sample format|load failed|response|send failed/);
       assert.ok(worker.terminated);
